@@ -1,0 +1,6 @@
+zstandard==0.23.0
+numpy>=2.1.0
+pandas>=2.0.0
+pyarrow>=14.0.0
+orjson==3.10.12
+psutil==7.1.1

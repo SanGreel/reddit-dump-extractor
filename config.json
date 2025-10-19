@@ -1,0 +1,50 @@
+{
+  "file_reading": {
+    "chunk_size_bytes": 33554432,
+    "max_window_size_bytes": 268435456,
+    "zst_max_window_size_bytes": 2147483648
+  },
+  "logging": {
+    "log_dir": "logs",
+    "log_file_name": "bot.log",
+    "log_max_bytes": 16777216,
+    "log_backup_count": 5,
+    "log_format": "%(asctime)s - %(levelname)s: %(message)s"
+  },
+  "processing": {
+    "default_processes": 1,
+    "progress_log_interval": 5000000,
+    "default_max_ram_gb": 8.0,
+    "ram_safety_margin": 0.9
+  },
+  "file_filtering": {
+    "default_file_filter": "^RC_|^RS_",
+    "file_extension": ".zst"
+  },
+  "output": {
+    "default_output_dir": "output",
+    "checkpoint_file": "processing_checkpoint.json",
+    "parquet_compression": "snappy",
+    "csv_compression": null,
+    "default_format": "csv"
+  },
+  "data_normalization": {
+    "problematic_fields": [
+      "edited",
+      "archived",
+      "locked",
+      "removed",
+      "deleted",
+      "is_self",
+      "stickied",
+      "spoiler",
+      "over_18",
+      "pinned",
+      "quarantine"
+    ]
+  },
+  "defaults": {
+    "field": "subreddit",
+    "value": "ukraine"
+  }
+}
