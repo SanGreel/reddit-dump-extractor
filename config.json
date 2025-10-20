@@ -1,6 +1,6 @@
 {
   "file_reading": {
-    "chunk_size_bytes": 33554432,
+    "chunk_size_bytes": 134217728,
     "max_window_size_bytes": 268435456,
     "zst_max_window_size_bytes": 2147483648
   },
