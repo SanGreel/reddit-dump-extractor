@@ -1,320 +1,178 @@
-# Reddit Dump Filter - Parallel Processing Edition
+# Reddit Dump Extractor
 
-A high-performance, memory-efficient script for filtering Reddit dump files (`.zst` compressed) and outputting results to Parquet format with support for parallel processing, checkpointing, and configurable resource limits.
+This repository contains **reddit_zst_filter.py** - a Python script for filtering and extracting data from compressed Reddit dump files (.zst format).
 
-## Features
+The script allows you to:
+- **Filter by subreddits** - Extract comments/posts from specific communities (subreddits are topic-based communities/groups on Reddit like r/python, r/ukraine, etc.)
+- **Filter by authors** - Extract all content from specific Reddit users
+- **Filter by any field** - Filter using any available metadata field (score, timestamp, etc.)
+- **Multiple output formats** - Save results as Parquet or CSV files
 
-### 🚀 Performance
-- **Parallel Processing**: Process multiple files concurrently using multiprocessing
-- **Optimized Memory Usage**: Configurable RAM limits with monitoring
-- **Direct Streaming**: Reads compressed files and writes directly to Parquet without intermediate steps
+The tool is optimized for processing large Reddit archive dumps efficiently with streaming decompression and memory monitoring.
 
-### 💾 Persistent Output
-- **Separate Output Files**: Each input file generates its own Parquet output file
-- **Checkpoint/Resume**: Automatically tracks processed files for resumable processing
-- **Distributed Processing**: Perfect for processing large datasets across multiple runs on resource-constrained systems
+## Data
 
-### ⚙️ Flexible Configuration
-- **Centralized Constants**: All hardcoded values extracted to top-level configuration
-- **Command-Line Arguments**: Extensive CLI options for runtime configuration
-- **Multiple Matching Modes**: Exact, partial, and regex-based filtering
+Files for your research can be downloaded [here](https://academictorrents.com/details/30dee5f0406da7a353aff6a8caa2d54fd01f2ca1) 
 
-### 🛡️ Robustness
-- **Error Handling**: Comprehensive error handling and logging
-- **Progress Tracking**: Real-time progress updates with statistics
-- **Memory Monitoring**: Warnings when approaching memory limits
+## Installation
 
-## Requirements
+### macOS / Linux
 
 ```bash
-pip install zstandard pandas pyarrow orjson psutil
+python3 -m venv venv
+source ./venv/bin/activate
+pip install -r requirements.txt
 ```
+
+### Windows
+
+```bash
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+You can also use the pyenv library to easily manage your Python environments.
+Tutorial for maxOS / Linux - https://github.com/pyenv/pyenv
+Tutorial for Windows - https://github.com/pyenv-win/pyenv-win
 
 ## Usage
 
-### Basic Usage
-
-Process all Reddit dump files in a directory:
-
 ```bash
-python reddit_zst_filter.py /path/to/reddit/dumps
+python reddit_zst_filter.py <input_folder> [options]
 ```
 
-### Filter Specific Subreddits
+### Options
 
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--output_dir` | Output directory for filtered files | `output` |
+| `--format` | Output format: `parquet` or `csv` | `csv` |
+| `--field` | Field to filter on | `subreddit` |
+| `--value` | Comma-separated values to match | `ukraine` |
+| `--regex` | Enable regex pattern matching | `False` |
+| `--file_filter` | Regex pattern for input filenames | `^RC_\|^RS_` |
+| `--config` | Path to config file | `config.json` |
+
+### Available Fields
+
+Reddit data contains the following fields that can be used for filtering:
+
+- `author` - Author of the comment/post
+- `body` - Text content of the comment
+- `subreddit` - Name of the subreddit
+- `created_utc` - Creation timestamp (UTC)
+- `score` - Number of upvotes/downvotes
+- `id` - Unique identifier
+- `link_id` - ID of the linked post
+- `parent_id` - ID of the parent comment
+- `edited` - Edit timestamp
+- `archived` - Archive status
+- `gilded` - Number of awards received
+
+## Examples
+
+**Filter by subreddit:**
 ```bash
-python reddit_zst_filter.py /path/to/dumps \
-    --output_dir ./results \
-    --value "python,programming,machinelearning"
+python reddit_zst_filter.py /path/to/dumps --value python
 ```
 
-### Regex Matching
-
+**Multiple subreddits:**
 ```bash
-python reddit_zst_filter.py /path/to/dumps \
-    --regex \
-    --value "tech.*|science.*|data.*"
+python reddit_zst_filter.py /path/to/dumps --value "python,javascript,java"
 ```
 
-### Custom Memory and Process Limits
-
+**Output to Parquet format:**
 ```bash
-python reddit_zst_filter.py /path/to/dumps \
-    --max_ram 16 \
-    --processes 8 \
-    --output_dir ./output
+python reddit_zst_filter.py /path/to/dumps --format parquet --output_dir parquet_output
 ```
 
-### Resume Processing from Checkpoint
-
+**Filter by author:**
 ```bash
-# First run - processes some files
-python reddit_zst_filter.py /path/to/dumps --output_dir ./results
-
-# Second run - automatically resumes, skips already processed files
-python reddit_zst_filter.py /path/to/dumps --output_dir ./results
+python reddit_zst_filter.py /path/to/dumps --field author --value "username"
 ```
 
-### Partial String Matching
-
+**Regex matching:**
 ```bash
-python reddit_zst_filter.py /path/to/dumps \
-    --partial \
-    --value "tech,science"
+python reddit_zst_filter.py /path/to/dumps --value "^(python|java)" --regex
 ```
 
-### Filter by Custom Field
-
+**Custom file filter (process only comments from 2023):**
 ```bash
-python reddit_zst_filter.py /path/to/dumps \
-    --field author \
-    --value "specific_user"
+python reddit_zst_filter.py /path/to/dumps --file_filter "^RC_2023-"
 ```
 
-## Command-Line Arguments
+## Configuration
 
-### Input/Output
-- `input` (required): Input folder to recursively read .zst files from
-- `--output_dir`: Output directory for Parquet files (default: `output`)
+The tool uses a [config.json](config.json) file for advanced settings:
 
-### Filtering
-- `--field`: Field to filter on (default: `subreddit`)
-- `--value`: Value(s) to match, comma separated, case insensitive (default: `pushshift`)
-- `--value_list`: File with newline separated values to match
-- `--partial`: Partial match instead of exact match
-- `--regex`: Treat values as regex patterns
+- **File Reading**: Chunk sizes and memory window settings for .zst decompression
+- **Logging**: Log directory, file rotation, and format
+- **Processing**: Progress reporting intervals
+- **Output**: Compression settings for Parquet (snappy) and CSV (gzip/none)
+- **Data Normalization**: Automatic type conversion for problematic boolean fields
 
-### File Selection
-- `--file_filter`: Regex pattern filenames must match (default: `^RC_|^RS_`)
+## Output
 
-### Performance
-- `--processes`: Number of parallel processes (default: 10)
-- `--max_ram`: Maximum RAM usage in GB (default: 8.0)
+Each input `.zst` file is processed individually and outputs a separate file:
 
-### Checkpoint/Resume
-- `--checkpoint`: Path to checkpoint file (default: `processing_checkpoint.json`)
-- `--no_checkpoint`: Disable checkpoint/resume functionality
+- **Parquet**: `output/RC_2023-01.parquet`
+- **CSV**: `output/RC_2023-01.csv` or `output/RC_2023-01.csv.gz` (if compression enabled)
 
-## Architecture
+The tool logs:
+- Processing progress every 5M lines
+- Memory usage (RAM)
+- CPU usage
+- Total records matched per file
+- Final statistics (total lines, matches, errors, processing rate)
 
-### Key Components
 
-#### Configuration Constants
-All hardcoded values are now centralized at the top of the file for easy modification:
-- Chunk sizes for file reading
-- Logging configuration
-- Default processing parameters
-- Memory limits and safety margins
+### Directory Structure Example
 
-#### Classes
+The output files are organized in the output directory with preserved naming from the input files:
 
-**`FileReader`**: Handles reading and decompressing .zst files
-- Efficient streaming decompression
-- Unicode error handling
-- Line-by-line iteration
+![Directory Structure](media/dir.png)
 
-**`CheckpointManager`**: Manages processing checkpoints
-- Tracks processed files
-- Enables resumable processing
-- Automatic checkpoint saving
+### CSV Output Example
 
-**`MemoryMonitor`**: Monitors memory usage
-- Real-time RAM tracking
-- Configurable memory limits
-- Usage statistics and warnings
+The CSV output contains all filtered Reddit comments/posts with their metadata fields:
 
-**`DataNormalizer`**: Handles Parquet compatibility
-- Type normalization for problematic fields
-- Ensures consistent data types
+![CSV Example](media/csv.png)
 
-### Processing Flow
+## Performance
 
-1. **Initialization**
-   - Parse command-line arguments
-   - Load checkpoint (if exists)
-   - Initialize memory monitor
-   - Collect input files
+The tool is optimized for processing large Reddit dump files:
 
-2. **File Discovery**
-   - Recursively scan input directory
-   - Filter files by pattern
-   - Exclude already processed files (from checkpoint)
+- Streaming decompression (doesn't load entire file into memory)
+- Memory monitoring and reporting
+- Fast JSON parsing with orjson
+- Efficient field filtering (exact match or regex)
+- Sequential file processing
+- Configurable chunk sizes and buffer settings
 
-3. **Parallel Processing**
-   - Distribute files across worker processes
-   - Each process handles one file at a time
-   - Each file generates a separate output Parquet file
+## Requirements
 
-4. **Per-File Processing**
-   - Stream decompress .zst file
-   - Parse JSON lines
-   - Filter based on criteria
-   - Write matches to individual Parquet file
+- Python 3.13
+- pandas
+- pyarrow
+- zstandard
+- orjson
+- psutil
 
-5. **Progress Tracking**
-   - Update checkpoint after each file
-   - Log statistics and memory usage
-   - Monitor RAM limits
+See [requirements.txt](requirements.txt) for complete dependencies.
 
-6. **Completion**
-   - Generate final statistics
-   - Report total records matched
-   - Display output file information
+## Credits
 
-## Output Structure
+This project is based on code and approaches from:
+- **[Watchful1](https://github.com/Watchful1)** - Original author of [PushshiftDumps](https://github.com/Watchful1/PushshiftDumps/tree/master/scripts) scripts that served as the foundation for this tool
+- **Pushshift Team** - For collecting, archiving, and making available the comprehensive Reddit dataset
 
-Each input file generates a corresponding output file:
+### Updated Version
+This enhanced and adapted version was prepared as part of the **Computational Social Science (CSS) course, 2025, NaUKMA**.
 
-```
-output/
-├── RC_2023-01.parquet
-├── RC_2023-02.parquet
-├── RC_2023-03.parquet
-└── processing_checkpoint.json
-```
+## Acknowledgments
 
-This structure allows for:
-- **Iterative Processing**: Process data across multiple runs
-- **Partial Results**: Access results from completed files immediately
-- **Resource Management**: Avoid memory overflow from accumulating results
-- **Distributed Processing**: Process different files on different machines
-
-## Configuration Constants
-
-Located at the top of the script for easy customization:
-
-```python
-# File Reading Configuration
-CHUNK_SIZE = 2**28  # 268MB
-MAX_WINDOW_SIZE = (2**29) * 2  # 1GB
-ZST_MAX_WINDOW_SIZE = 2**31  # 2GB
-
-# Processing Configuration
-DEFAULT_PROCESSES = 10
-DEFAULT_MAX_RAM_GB = 8.0
-PROGRESS_LOG_INTERVAL = 5000000  # lines
-
-# Output Configuration
-DEFAULT_OUTPUT_DIR = "output"
-PARQUET_COMPRESSION = 'snappy'
-```
-
-## Memory Management
-
-The script includes intelligent memory management:
-
-1. **Configurable Limits**: Set maximum RAM via `--max_ram` argument
-2. **Safety Margin**: Uses 90% of max RAM to leave headroom
-3. **Real-time Monitoring**: Continuous memory usage tracking
-4. **Warnings**: Alerts when approaching memory limits
-5. **Per-File Processing**: Each file processed independently to avoid accumulation
-
-## Error Handling
-
-- **Graceful Degradation**: Processing continues even if individual files fail
-- **Detailed Logging**: All errors logged with context
-- **Interrupt Handling**: Clean shutdown on Ctrl+C
-- **Checkpoint Preservation**: Progress saved even on interruption
-
-## Performance Optimization
-
-1. **Parallel Processing**: Multiple files processed simultaneously
-2. **Streaming Decompression**: No need to decompress entire file at once
-3. **Direct Parquet Writing**: No intermediate formats
-4. **Optimized JSON Parsing**: Uses `orjson` for fast parsing
-5. **Single-value Optimization**: Faster path for exact single-value matching
-
-## Logging
-
-Logs are written to both console and file:
-- Console: Real-time progress and statistics
-- File: `logs/bot.log` with rotation (16MB max, 5 backups)
-
-## Use Cases
-
-### Distributed Processing on Limited Hardware
-
-Process a large dataset across multiple runs:
-
-```bash
-# Run 1: Process with 4GB RAM limit
-python reddit_zst_filter.py /data/reddit --max_ram 4 --processes 2
-
-# Run 2: Resume later (automatically skips completed files)
-python reddit_zst_filter.py /data/reddit --max_ram 4 --processes 2
-```
-
-### Multi-machine Processing
-
-Split processing across multiple machines:
-
-```bash
-# Machine 1: Process first half
-python reddit_zst_filter.py /data/reddit --output_dir ./results_1
-
-# Machine 2: Process second half (different output dir)
-python reddit_zst_filter.py /data/reddit --output_dir ./results_2
-
-# Combine results later by copying Parquet files
-```
-
-### Memory-constrained Environments
-
-Process large files without running out of memory:
-
-```bash
-python reddit_zst_filter.py /data/reddit \
-    --max_ram 2 \
-    --processes 1 \
-    --output_dir ./results
-```
-
-## Migration from Original Script
-
-### Key Changes
-
-1. **Output Format**:
-   - OLD: Single combined Parquet file
-   - NEW: Separate Parquet file per input file
-
-2. **Arguments**:
-   - Removed: `--output`, `--batch_size`
-   - Added: `--output_dir`, `--max_ram`, `--checkpoint`, `--no_checkpoint`
-
-3. **Processing**:
-   - OLD: Accumulates records in memory, periodic batch writes
-   - NEW: Writes each file's results immediately
-
-4. **Resumability**:
-   - OLD: Must reprocess all files on restart
-   - NEW: Automatically resumes from checkpoint
-
-### Backward Compatibility
-
-The script maintains all original command-line arguments except:
-- `--output` replaced with `--output_dir`
-- `--batch_size` removed (no longer needed)
-
-## License
-
-Same as original script.
+Special thanks to:
+- [Watchful1](https://github.com/Watchful1) for creating the original filtering and processing logic
+- The Pushshift project for their invaluable work in archiving and providing access to Reddit data
+- All contributors to the open-source tools and libraries that make this project possible

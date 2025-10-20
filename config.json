@@ -12,10 +12,7 @@
     "log_format": "%(asctime)s - %(levelname)s: %(message)s"
   },
   "processing": {
-    "default_processes": 1,
-    "progress_log_interval": 5000000,
-    "default_max_ram_gb": 8.0,
-    "ram_safety_margin": 0.9
+    "progress_log_interval": 5000000
   },
   "file_filtering": {
     "default_file_filter": "^RC_|^RS_",
@@ -23,7 +20,6 @@
   },
   "output": {
     "default_output_dir": "output",
-    "checkpoint_file": "processing_checkpoint.json",
     "parquet_compression": "snappy",
     "csv_compression": null,
     "default_format": "csv"
@@ -45,6 +41,7 @@
   },
   "defaults": {
     "field": "subreddit",
-    "value": "ukraine"
+    "value": "ukraine",
+    "regex": false
   }
 }

@@ -7,7 +7,6 @@ import time
 import argparse
 import re
 import logging.handlers
-import multiprocessing
 from typing import List, Set, Dict, Any, Optional, Union, Tuple
 from pathlib import Path
 import json
@@ -110,62 +109,19 @@ class FileReader:
             reader.close()
 
 
-class CheckpointManager:
-    def __init__(self, checkpoint_path: str):
-        self.checkpoint_path = checkpoint_path
-        self.processed_files: Set[str] = set()
-        self.load_checkpoint()
-
-    def load_checkpoint(self) -> None:
-        if os.path.exists(self.checkpoint_path):
-            try:
-                with open(self.checkpoint_path, 'r') as f:
-                    data = json.load(f)
-                    self.processed_files = set(data.get('processed_files', []))
-                log.info(f"Loaded checkpoint: {len(self.processed_files)} files already processed")
-            except Exception as e:
-                log.warning(f"Failed to load checkpoint: {e}")
-                self.processed_files = set()
-
-    def save_checkpoint(self) -> None:
-        try:
-            with open(self.checkpoint_path, 'w') as f:
-                json.dump({
-                    'processed_files': list(self.processed_files),
-                    'last_updated': time.time()
-                }, f, indent=2)
-        except Exception as e:
-            log.error(f"Failed to save checkpoint: {e}")
-
-    def mark_processed(self, file_path: str) -> None:
-        self.processed_files.add(file_path)
-        self.save_checkpoint()
-
-    def is_processed(self, file_path: str) -> bool:
-        return file_path in self.processed_files
-
-    def get_pending_files(self, all_files: List[str]) -> List[str]:
-        return [f for f in all_files if not self.is_processed(f)]
-
-
 class MemoryMonitor:
-    def __init__(self, max_ram_gb: float):
-        self.max_ram_bytes = max_ram_gb * (1024**3) * config.get('processing', 'ram_safety_margin')
+    def __init__(self):
         self.process = psutil.Process()
 
     def get_current_usage_gb(self) -> float:
         return self.process.memory_info().rss / (1024**3)
-
-    def is_within_limit(self) -> bool:
-        return self.process.memory_info().rss < self.max_ram_bytes
 
     def get_usage_stats(self) -> Dict[str, float]:
         mem_info = self.process.memory_info()
         return {
             'rss_gb': mem_info.rss / (1024**3),
             'vms_gb': mem_info.vms / (1024**3),
-            'percent': self.process.memory_percent(),
-            'max_gb': self.max_ram_bytes / (1024**3)
+            'percent': self.process.memory_percent()
         }
 
 
@@ -185,7 +141,6 @@ def process_file(
     file_path: str,
     field: str,
     values: Union[Set[str], List[re.Pattern]],
-    partial: bool,
     regex: bool,
     output_path: str,
     output_format: str
@@ -195,7 +150,7 @@ def process_file(
     error_lines = 0
 
     value = None
-    if len(values) == 1 and not regex and not partial:
+    if len(values) == 1 and not regex:
         value = min(values)
 
     process = psutil.Process()
@@ -210,11 +165,6 @@ def process_file(
                 if regex:
                     for reg in values:
                         if reg.search(observed):
-                            matched = True
-                            break
-                elif partial:
-                    for val in values:
-                        if val in observed:
                             matched = True
                             break
                 else:
@@ -275,13 +225,9 @@ def process_file(
     return file_path, lines_processed, len(matched_records), error_lines
 
 
-def process_file_wrapper(args: Tuple) -> Tuple[str, int, int, int]:
-    return process_file(*args)
-
-
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Filter Reddit dumps and output to Parquet/CSV format with parallel processing",
+        description="Filter Reddit dumps and output to Parquet/CSV format",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
 
@@ -312,9 +258,12 @@ def parse_arguments() -> argparse.Namespace:
         default=config.get('defaults', 'value')
     )
 
-    parser.add_argument("--value_list", help="File with newline separated values to match", default=None)
-    parser.add_argument("--partial", help="Partial match instead of exact match", action='store_true', default=False)
-    parser.add_argument("--regex", help="Treat values as regex patterns", action='store_true', default=False)
+    parser.add_argument(
+        "--regex",
+        help=f"Treat values as regex patterns (default: {config.get('defaults', 'regex')})",
+        action='store_true',
+        default=config.get('defaults', 'regex')
+    )
 
     parser.add_argument(
         "--file_filter",
@@ -322,27 +271,6 @@ def parse_arguments() -> argparse.Namespace:
         default=config.get('file_filtering', 'default_file_filter')
     )
 
-    parser.add_argument(
-        "--processes",
-        help=f"Number of parallel processes (default: {config.get('processing', 'default_processes')})",
-        default=config.get('processing', 'default_processes'),
-        type=int
-    )
-
-    parser.add_argument(
-        "--max_ram",
-        help=f"Maximum RAM usage in GB (default: {config.get('processing', 'default_max_ram_gb')})",
-        default=config.get('processing', 'default_max_ram_gb'),
-        type=float
-    )
-
-    parser.add_argument(
-        "--checkpoint",
-        help=f"Path to checkpoint file (default: {config.get('output', 'checkpoint_file')})",
-        default=config.get('output', 'checkpoint_file')
-    )
-
-    parser.add_argument("--no_checkpoint", help="Disable checkpoint/resume functionality", action='store_true', default=False)
     parser.add_argument("--config", help="Path to config file (default: config.json)", default="config.json")
 
     return parser.parse_args()
@@ -364,17 +292,7 @@ def collect_input_files(input_dir: str, file_filter: str) -> List[str]:
 
 
 def load_filter_values(args: argparse.Namespace) -> Union[Set[str], List[re.Pattern]]:
-    values = set()
-
-    if args.value_list:
-        log.info(f"Reading values from: {args.value_list}")
-        with open(args.value_list, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    values.add(line)
-    else:
-        values = set(v.strip() for v in args.value.split(",") if v.strip())
+    values = set(v.strip() for v in args.value.split(",") if v.strip())
 
     if args.regex:
         regexes = []
@@ -388,8 +306,7 @@ def load_filter_values(args: argparse.Namespace) -> Union[Set[str], List[re.Patt
         return regexes
     else:
         lower_values = {val.lower() for val in values}
-        match_type = "partial" if args.partial else "exact"
-        log.info(f"Loaded {len(lower_values)} value(s) for {match_type} matching on field '{args.field}'")
+        log.info(f"Loaded {len(lower_values)} value(s) for exact matching on field '{args.field}'")
         return lower_values
 
 
@@ -418,57 +335,24 @@ def main():
         config = Config(args.config)
 
     log.info("=" * 80)
-    log.info("Reddit Dump Filter - Parallel Processing Edition")
+    log.info("Reddit Dump Filter")
     log.info("=" * 80)
     log.info(f"Input directory: {args.input}")
     log.info(f"Output directory: {args.output_dir}")
     log.info(f"Output format: {args.format}")
-    log.info(f"Max RAM: {args.max_ram:.1f} GB")
-    log.info(f"Parallel processes: {args.processes}")
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    checkpoint_manager = None
-    if not args.no_checkpoint:
-        checkpoint_path = os.path.join(args.output_dir, args.checkpoint)
-        checkpoint_manager = CheckpointManager(checkpoint_path)
-
-    memory_monitor = MemoryMonitor(args.max_ram)
+    memory_monitor = MemoryMonitor()
     values = load_filter_values(args)
 
     log.info(f"Scanning for input files matching pattern: {args.file_filter}")
-    all_input_files = collect_input_files(args.input, args.file_filter)
-    log.info(f"Found {len(all_input_files)} total files")
-
-    if len(all_input_files) == 0:
-        log.error("No matching files found!")
-        sys.exit(1)
-
-    if checkpoint_manager:
-        input_files = checkpoint_manager.get_pending_files(all_input_files)
-        processed_count = len(all_input_files) - len(input_files)
-        if processed_count > 0:
-            log.info(f"Skipping {processed_count} already processed files")
-        log.info(f"Processing {len(input_files)} pending files")
-    else:
-        input_files = all_input_files
+    input_files = collect_input_files(args.input, args.file_filter)
+    log.info(f"Found {len(input_files)} total files")
 
     if len(input_files) == 0:
-        log.info("All files already processed!")
-        return
-
-    process_args = [
-        (
-            input_file,
-            args.field,
-            values,
-            args.partial,
-            args.regex,
-            generate_output_path(input_file, args.output_dir, args.format),
-            args.format
-        )
-        for input_file in input_files
-    ]
+        log.error("No matching files found!")
+        sys.exit(1)
 
     total_processed = 0
     total_lines = 0
@@ -477,42 +361,40 @@ def main():
     start_time = time.time()
 
     log.info("=" * 80)
-    log.info("Starting parallel processing...")
+    log.info("Starting processing...")
     log.info("=" * 80)
 
     try:
-        with multiprocessing.Pool(processes=args.processes) as pool:
-            for result in pool.imap_unordered(process_file_wrapper, process_args):
-                file_path, lines_processed, matched_count, error_count = result
+        for input_file in input_files:
+            output_path = generate_output_path(
+                input_file, args.output_dir, args.format)
 
-                total_processed += 1
-                total_lines += lines_processed
-                total_matched += matched_count
-                total_errors += error_count
+            file_path, lines_processed, matched_count, error_count = process_file(
+                input_file,
+                args.field,
+                values,
+                args.regex,
+                output_path,
+                args.format
+            )
 
-                if checkpoint_manager:
-                    checkpoint_manager.mark_processed(file_path)
+            total_processed += 1
+            total_lines += lines_processed
+            total_matched += matched_count
+            total_errors += error_count
 
-                progress_pct = (total_processed / len(input_files)) * 100
-                mem_stats = memory_monitor.get_usage_stats()
-                log.info(
-                    f"Progress: {total_processed}/{len(input_files)} ({progress_pct:.1f}%) | "
-                    f"Total matched: {total_matched:,} | RAM: {mem_stats['rss_gb']:.2f} GB"
-                )
-
-                if not memory_monitor.is_within_limit():
-                    log.warning(
-                        f"Approaching memory limit! Current: {mem_stats['rss_gb']:.2f} GB / "
-                        f"Max: {mem_stats['max_gb']:.2f} GB"
-                    )
+            progress_pct = (total_processed / len(input_files)) * 100
+            mem_stats = memory_monitor.get_usage_stats()
+            log.info(
+                f"Progress: {total_processed}/{len(input_files)} ({progress_pct:.1f}%) | "
+                f"Total matched: {total_matched:,} | RAM: {mem_stats['rss_gb']:.2f} GB"
+            )
 
     except KeyboardInterrupt:
         log.warning("Processing interrupted by user")
-        pool.terminate()
-        pool.join()
         sys.exit(1)
     except Exception as e:
-        log.error(f"Error during parallel processing: {e}")
+        log.error(f"Error during processing: {e}")
         raise
 
     elapsed = time.time() - start_time
@@ -541,9 +423,6 @@ def main():
         total_size += os.path.getsize(file_path)
     log.info(f"Total output size: {total_size / (1024**2):.2f} MB")
 
-    mem_stats = memory_monitor.get_usage_stats()
-    log.info(f"Peak RAM usage: {mem_stats['rss_gb']:.2f} GB")
-    log.info("=" * 80)
 
 
 if __name__ == '__main__':
