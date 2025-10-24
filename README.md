@@ -1,18 +1,11 @@
 # Reddit Dump Extractor
 
-This repository contains **reddit_zst_filter.py** - a Python script for filtering and extracting data from compressed Reddit dump files (.zst format).
+This repository contains tools for filtering and extracting data from compressed Reddit dump files (.zst format).
 
-The script allows you to:
-- **Filter by subreddits** - Extract comments/posts from specific communities (subreddits are topic-based communities/groups on Reddit like r/python, r/ukraine, etc.)
-- **Filter by authors** - Extract all content from specific Reddit users
-- **Filter by any field** - Filter using any available metadata field (score, timestamp, etc.)
-- **Multiple output formats** - Save results as Parquet or CSV files
+## Available Tools
 
-The tool is optimized for processing large Reddit archive dumps efficiently with streaming decompression and memory monitoring.
-
-## Data
-
-Files for your research can be downloaded [here](https://academictorrents.com/details/30dee5f0406da7a353aff6a8caa2d54fd01f2ca1) 
+### **reddit_zst_filter.py** - Unified Python Processor (Dual-Mode)
+A comprehensive data processing script that supports both Python-native and shell-based decompression methods. Choose the best approach for your system resources and performance needs.
 
 ## Installation
 
@@ -24,6 +17,16 @@ source ./venv/bin/activate
 pip install -r requirements.txt
 ```
 
+**For shell method on macOS, also install:**
+```bash
+brew install zstd coreutils jq
+```
+
+**For shell method on Linux:**
+```bash
+sudo apt install zstd coreutils jq
+```
+
 ### Windows
 
 ```bash
@@ -32,17 +35,41 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+**For shell method on Windows:**
+
+The shell-based method works best with WSL (Windows Subsystem for Linux):
+```bash
+# Install WSL first (PowerShell as Admin)
+wsl --install
+
+# Then inside WSL:
+sudo apt update
+sudo apt install zstd coreutils jq python3 python3-pip
+pip3 install -r requirements.txt
+```
+
 You can also use the pyenv library to easily manage your Python environments.
-Tutorial for maxOS / Linux - https://github.com/pyenv/pyenv
+Tutorial for macOS / Linux - https://github.com/pyenv/pyenv
 Tutorial for Windows - https://github.com/pyenv-win/pyenv-win
 
 ## Usage
+
+### reddit_zst_filter.py - Unified Script
 
 ```bash
 python reddit_zst_filter.py <input_folder> [options]
 ```
 
-### Options
+#### Processing Methods
+
+The script supports two decompression and filtering methods:
+
+| Method | Best For | Memory Usage | Speed | Requirements |
+|--------|----------|--------------|-------|--------------|
+| `python` (default) | Full control, complex filtering, stable systems | High | Fast | Python libraries only |
+| `shell` | Limited RAM, huge files, simple filters | Very Low | Moderate | zstd, jq, coreutils |
+
+#### Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
@@ -52,7 +79,24 @@ python reddit_zst_filter.py <input_folder> [options]
 | `--value` | Comma-separated values to match | `ukraine` |
 | `--regex` | Enable regex pattern matching | `False` |
 | `--file_filter` | Regex pattern for input filenames | `^RC_\|^RS_` |
+| `--method` | Decompression method: `python` or `shell` | `python` |
+| `--chunk_size` | Lines per chunk for shell method | `1000000` |
 | `--config` | Path to config file | `config.json` |
+
+#### Processing Methods Explained
+
+**Python Method (`--method python`):**
+- Uses the zstandard Python library for decompression
+- Filters data in-memory with direct field matching or regex
+- More detailed error tracking and progress reporting
+- Better for systems with adequate RAM and when you need complex filtering
+
+**Shell Method (`--method shell`):**
+- Decompresses with multi-threaded `zstd` command-line tool
+- Uses `jq` for fast JSON filtering
+- Splits processing into chunks with `gsplit`
+- Streams data through Unix pipes to minimize memory footprint
+- Better for systems with limited RAM or very large files
 
 ### Available Fields
 
@@ -71,6 +115,8 @@ Reddit data contains the following fields that can be used for filtering:
 - `gilded` - Number of awards received
 
 ## Examples
+
+### Python Method (Default)
 
 **Filter by subreddit:**
 ```bash
@@ -102,11 +148,43 @@ python reddit_zst_filter.py /path/to/dumps --value "^(python|java)" --regex
 python reddit_zst_filter.py /path/to/dumps --file_filter "^RC_2023-"
 ```
 
+### Shell Method (Memory-Efficient)
+
+**Filter by subreddit:**
+```bash
+python reddit_zst_filter.py /path/to/dumps --method shell --value ukraine
+```
+
+**Multiple subreddits:**
+```bash
+python reddit_zst_filter.py /path/to/dumps --method shell --value "ukraine,worldnews,europe"
+```
+
+**Filter comments by keywords in body text (regex):**
+```bash
+python reddit_zst_filter.py /path/to/dumps --method shell --field body --value "kyiv|war" --regex
+```
+
+**Smaller chunks for very limited memory:**
+```bash
+python reddit_zst_filter.py /path/to/dumps --method shell --chunk_size 500000
+```
+
+**Output to Parquet format:**
+```bash
+python reddit_zst_filter.py /path/to/dumps --method shell --format parquet --output_dir parquet_output
+```
+
+**Process only submissions (posts) from 2021:**
+```bash
+python reddit_zst_filter.py /path/to/dumps --method shell --file_filter "^RS_2021-"
+```
+
 ## Configuration
 
 The tool uses a [config.json](config.json) file for advanced settings:
 
-- **File Reading**: Chunk sizes and memory window settings for .zst decompression
+- **File Reading**: Chunk sizes and memory window settings for .zst decompression (Python method)
 - **Logging**: Log directory, file rotation, and format
 - **Processing**: Progress reporting intervals
 - **Output**: Compression settings for Parquet (snappy) and CSV (gzip/none)
@@ -120,12 +198,10 @@ Each input `.zst` file is processed individually and outputs a separate file:
 - **CSV**: `output/RC_2023-01.csv` or `output/RC_2023-01.csv.gz` (if compression enabled)
 
 The tool logs:
-- Processing progress every 5M lines
-- Memory usage (RAM)
-- CPU usage
+- Processing progress
+- Memory usage (RAM and CPU percentage)
 - Total records matched per file
 - Final statistics (total lines, matches, errors, processing rate)
-
 
 ### Directory Structure Example
 
@@ -139,19 +215,73 @@ The CSV output contains all filtered Reddit comments/posts with their metadata f
 
 ![CSV Example](media/csv.png)
 
-## Performance
+### Performance Characteristics
 
-The tool is optimized for processing large Reddit dump files:
+**Python Method:**
+- **Memory**: High - maintains decoded chunks and matched records in memory
+- **Speed**: Fast - direct in-memory processing
+- **Error Tracking**: Detailed with per-line error logging
+- **Best for**: Systems with 8GB+ available RAM
 
-- Streaming decompression (doesn't load entire file into memory)
+**Shell Method:**
+- **Memory**: Very Low - streams through Unix pipes
+- **Speed**: Moderate - limited by pipe overhead and I/O
+- **Error Tracking**: Basic - handled by shell commands
+- **Best for**: Systems with 2-4GB available RAM or large files (>5GB)
+
+**Optimizations (Python method):**
+- Streaming decompression with zstandard
 - Memory monitoring and reporting
 - Fast JSON parsing with orjson
 - Efficient field filtering (exact match or regex)
 - Sequential file processing
 - Configurable chunk sizes and buffer settings
 
+**Optimizations (Shell method):**
+- Multi-threaded zstd decompression (`-T0` flag)
+- Streaming pipeline (no intermediate files until final output)
+- Automatic temporary file cleanup
+- Adjustable chunk sizes for memory control
+
+## Troubleshooting
+
+### Out of Memory Errors
+
+If processing fails with out-of-memory errors:
+
+1. **Switch to shell method:**
+   ```bash
+   python reddit_zst_filter.py /path/to/dumps --method shell
+   ```
+
+2. **Reduce chunk size (shell method):**
+   ```bash
+   python reddit_zst_filter.py /path/to/dumps --method shell --chunk_size 500000
+   ```
+
+3. **Process files individually** instead of a directory
+
+4. **Close other applications** to free up system RAM
+
+### Command Not Found Errors (Shell Method)
+
+**macOS:**
+```bash
+# Install missing tools
+brew install zstd coreutils jq
+```
+
+**Linux:**
+```bash
+sudo apt install zstd coreutils jq
+```
+
+**Windows:**
+Use WSL (see Installation section above)
+
 ## Requirements
 
+### For reddit_zst_filter.py
 - Python 3.13
 - pandas
 - pyarrow
@@ -159,7 +289,15 @@ The tool is optimized for processing large Reddit dump files:
 - orjson
 - psutil
 
-See [requirements.txt](requirements.txt) for complete dependencies.
+### For shell method (--method shell)
+- System tools: zstd, coreutils (gsplit), jq
+- Same Python dependencies as above
+
+See [requirements.txt](requirements.txt) for complete Python dependencies.
+
+## Data
+
+Files for your research can be downloaded [here](https://academictorrents.com/details/30dee5f0406da7a353aff6a8caa2d54fd01f2ca1)
 
 ## Credits
 
