@@ -1,18 +1,19 @@
 # Reddit Dump Extractor
 
-This repository contains **reddit_zst_filter.py** - a Python script for filtering and extracting data from compressed Reddit dump files (.zst format).
+Tools for filtering and extracting data from compressed Reddit dump files (.zst format).
 
-The script allows you to:
-- **Filter by subreddits** - Extract comments/posts from specific communities (subreddits are topic-based communities/groups on Reddit like r/python, r/ukraine, etc.)
-- **Filter by authors** - Extract all content from specific Reddit users
-- **Filter by any field** - Filter using any available metadata field (score, timestamp, etc.)
-- **Multiple output formats** - Save results as Parquet or CSV files
+## About
 
-The tool is optimized for processing large Reddit archive dumps efficiently with streaming decompression and memory monitoring.
+This repository provides **two separate methods** for processing large volumes of Reddit data, optimized for different resource constraints and performance requirements.
 
-## Data
+### Two Processing Methods
 
-Files for your research can be downloaded [here](https://academictorrents.com/details/30dee5f0406da7a353aff6a8caa2d54fd01f2ca1) 
+| Method               | File                             | Technology | RAM | Best For |
+|----------------------|----------------------------------|-----------|-----|----------|
+| **zstd_jq**          | `reddit_zst_filter_zstd_jq.py`   | Shell Pipes | Very Low (2-4GB) | Huge files, limited RAM |
+| **zstandard_python** | `reddit_zst_filter_zstandard.py` | Python | High (8GB+) | Speed, error tracking |
+
+---
 
 ## Installation
 
@@ -24,155 +25,335 @@ source ./venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Windows
-
+**For reddit_zst_filter_zstd_jq method on macOS:**
 ```bash
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
+brew install zstd coreutils jq
 ```
 
-You can also use the pyenv library to easily manage your Python environments.
-Tutorial for maxOS / Linux - https://github.com/pyenv/pyenv
-Tutorial for Windows - https://github.com/pyenv-win/pyenv-win
+**For reddit_zst_filter_zstd_jq method on Linux:**
+```bash
+sudo apt install zstd coreutils jq
+```
 
-## Usage
+**For reddit_zst_filter_zstd_jq method on Windows (WSL recommended):**
+```bash
+wsl --install
+# Inside WSL:
+sudo apt update && sudo apt install zstd coreutils jq python3 python3-pip
+pip3 install -r requirements.txt
+```
+
+---
+
+## reddit_zst_filter_zstd_jq: Shell Pipes
+
+**Run:** `reddit_zst_filter_zstd_jq.py`
+
+Uses Unix pipes (`zstd` + `jq` + `gsplit`) for streaming processing. Minimizes RAM usage by not storing data in memory.
+
+### Features
+
+- Very low RAM usage (2-4GB sufficient)
+- Streaming processing without memory storage
+- Automatic chunking
+- ⚙Optimized for huge files (>5GB)
+
+### Usage
 
 ```bash
-python reddit_zst_filter.py <input_folder> [options]
+python reddit_zst_filter_zstd_jq.py <input_folder> [options]
 ```
 
 ### Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--output_dir` | Output directory for filtered files | `output` |
-| `--format` | Output format: `parquet` or `csv` | `csv` |
-| `--field` | Field to filter on | `subreddit` |
-| `--value` | Comma-separated values to match | `ukraine` |
-| `--regex` | Enable regex pattern matching | `False` |
-| `--file_filter` | Regex pattern for input filenames | `^RC_\|^RS_` |
-| `--config` | Path to config file | `config.json` |
+| `--output_dir` | Output directory | `output` |
+| `--format` | Format: `parquet` or `csv` | `csv` |
+| `--field` | Field to filter | `subreddit` |
+| `--value` | Values (comma-separated) | `ukraine` |
+| `--regex` | Enable regex patterns | `false` |
+| `--file_filter` | Regex for filenames | `^RC_\|^RS_` |
+| `--chunk_size` | Lines per chunk | `1000000` |
+| `--config` | Path to config.json | `config.json` |
 
-### Available Fields
+### Examples
 
-Reddit data contains the following fields that can be used for filtering:
+**Basic filtering:**
+```bash
+python reddit_zst_filter_zstd_jq.py /path/to/dumps --value ukraine
+```
 
-- `author` - Author of the comment/post
-- `body` - Text content of the comment
-- `subreddit` - Name of the subreddit
-- `created_utc` - Creation timestamp (UTC)
-- `score` - Number of upvotes/downvotes
-- `id` - Unique identifier
-- `link_id` - ID of the linked post
-- `parent_id` - ID of the parent comment
-- `edited` - Edit timestamp
-- `archived` - Archive status
-- `gilded` - Number of awards received
+**Multiple values:**
+```bash
+python reddit_zst_filter_zstd_jq.py /path/to/dumps \
+  --value "ukraine,worldnews,europe"
+```
 
-## Examples
+**Regex search in text:**
+```bash
+python reddit_zst_filter_zstd_jq.py /path/to/dumps \
+  --field body \
+  --value "kyiv|war" \
+  --regex
+```
+
+**Smaller chunks for limited memory:**
+```bash
+python reddit_zst_filter_zstd_jq.py /path/to/dumps \
+  --chunk_size 500000
+```
+
+**Parquet format:**
+```bash
+python reddit_zst_filter_zstd_jq.py /path/to/dumps \
+  --format parquet \
+  --output_dir parquet_output
+```
+
+**Only posts from 2021:**
+```bash
+python reddit_zst_filter_zstd_jq.py /path/to/dumps \
+  --file_filter "^RS_2021-"
+```
+
+### Memory Optimization via `--chunk_size`
+
+- **250,000** — for 2GB available RAM
+- **500,000** — for 3-4GB
+- **1,000,000** (default) — for 4-8GB
+- **2,000,000** — for 8GB+
+
+---
+
+## reddit_zst_filter_zstandard.py: Python
+
+**Run:** `reddit_zst_filter_zstandard.py`
+
+Uses the `zstandard` Python library for decompression and direct in-memory JSON processing.
+
+### Features
+
+- Fast streaming processing
+- Detailed error tracking  
+- Intelligent memory management with monitoring
+- Flexible filtering (exact match or regex)
+
+### Usage
+
+```bash
+python reddit_zst_filter_zstandard.py <input_folder> [options]
+```
+
+### Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--output_dir` | Output directory | `output` |
+| `--format` | Format: `parquet` or `csv` | `csv` |
+| `--field` | Field to filter | `subreddit` |
+| `--value` | Values (comma-separated) | `ukraine` |
+| `--regex` | Enable regex patterns | `false` |
+| `--file_filter` | Regex for filenames | `^RC_\|^RS_` |
+| `--config` | Path to config.json | `config.json` |
+
+### Examples
 
 **Filter by subreddit:**
 ```bash
-python reddit_zst_filter.py /path/to/dumps --value python
+python reddit_zst_filter_zstandard.py /path/to/dumps --value ukraine
 ```
 
 **Multiple subreddits:**
 ```bash
-python reddit_zst_filter.py /path/to/dumps --value "python,javascript,java"
+python reddit_zst_filter_zstandard.py /path/to/dumps --value "python,javascript,java"
 ```
 
-**Output to Parquet format:**
+**Regex search:**
 ```bash
-python reddit_zst_filter.py /path/to/dumps --format parquet --output_dir parquet_output
+python reddit_zst_filter_zstandard.py /path/to/dumps \
+  --field body \
+  --value "^(kyiv|ukrainian)" \
+  --regex
+```
+
+**Parquet format:**
+```bash
+python reddit_zst_filter_zstandard.py /path/to/dumps \
+  --format parquet \
+  --output_dir parquet_output
 ```
 
 **Filter by author:**
 ```bash
-python reddit_zst_filter.py /path/to/dumps --field author --value "username"
+python reddit_zst_filter_zstandard.py /path/to/dumps \
+  --field author \
+  --value "username"
 ```
 
-**Regex matching:**
+**Only comments from 2023:**
 ```bash
-python reddit_zst_filter.py /path/to/dumps --value "^(python|java)" --regex
+python reddit_zst_filter_zstandard.py /path/to/dumps \
+  --file_filter "^RC_2023-"
 ```
 
-**Custom file filter (process only comments from 2023):**
-```bash
-python reddit_zst_filter.py /path/to/dumps --file_filter "^RC_2023-"
-```
+---
+
+## Available Fields
+
+- `author` — Comment/post author
+- `body` — Text content
+- `subreddit` — Subreddit name
+- `created_utc` — Creation timestamp (UTC)
+- `score` — Number of votes
+- `id` — Unique identifier
+- `link_id` — Post link ID
+- `parent_id` — Parent comment ID
+- `edited` — Edit timestamp
+- `archived` — Archive status
+- `gilded` — Number of awards
+
+---
 
 ## Configuration
 
-The tool uses a [config.json](config.json) file for advanced settings:
+Both methods use `config.json` for global settings. Example of it you can find in config.json file.
 
-- **File Reading**: Chunk sizes and memory window settings for .zst decompression
-- **Logging**: Log directory, file rotation, and format
-- **Processing**: Progress reporting intervals
-- **Output**: Compression settings for Parquet (snappy) and CSV (gzip/none)
-- **Data Normalization**: Automatic type conversion for problematic boolean fields
+---
 
 ## Output
 
-Each input `.zst` file is processed individually and outputs a separate file:
+Each input `.zst` file is processed separately and outputs its own file:
 
-- **Parquet**: `output/RC_2023-01.parquet`
-- **CSV**: `output/RC_2023-01.csv` or `output/RC_2023-01.csv.gz` (if compression enabled)
+- **Parquet:** `output/RC_2023-01.parquet`
+- **CSV:** `output/RC_2023-01.csv` or `output/RC_2023-01.csv.gz` (if compression enabled)
 
-The tool logs:
-- Processing progress every 5M lines
-- Memory usage (RAM)
-- CPU usage
-- Total records matched per file
+### Logging
+
+Both methods log:
+- Processing progress
+- Memory usage (RAM, CPU)
+- Records matched per file
 - Final statistics (total lines, matches, errors, processing rate)
 
+Logs are saved to `logs/reddit_filter.log` with file rotation.
 
-### Directory Structure Example
+---
 
-The output files are organized in the output directory with preserved naming from the input files:
+## Method Selection Guide
 
-![Directory Structure](media/dir.png)
+### When to Use Method 1 (Shell)
 
-### CSV Output Example
+✅ You have 2-4GB available RAM  
+✅ Processing files larger than 5GB  
+✅ Experiencing out-of-memory errors with Method 2  
+✅ Need predictable, controlled memory usage  
+✅ Simple filters (exact match or basic regex)  
 
-The CSV output contains all filtered Reddit comments/posts with their metadata fields:
+### When to Use Method 2 (Python)
 
-![CSV Example](media/csv.png)
+✅ You have 8GB+ available RAM  
+✅ Files smaller than 5GB  
+✅ Need detailed error reporting  
+✅ Want maximum processing speed  
+✅ Using complex regex patterns  
 
-## Performance
+---
 
-The tool is optimized for processing large Reddit dump files:
+## Troubleshooting
 
-- Streaming decompression (doesn't load entire file into memory)
-- Memory monitoring and reporting
-- Fast JSON parsing with orjson
-- Efficient field filtering (exact match or regex)
-- Sequential file processing
-- Configurable chunk sizes and buffer settings
+### Out of Memory Errors
+
+**Option 1: Use Method 1**
+```bash
+python reddit_zst_filter_zstd_jq.py /path/to/dumps
+```
+
+**Option 2: Reduce chunk size (Method 1)**
+```bash
+python reddit_zst_filter_zstd_jq.py /path/to/dumps --chunk_size 250000
+```
+
+**Option 3: Process files individually** instead of directory
+
+**Option 4: Close other applications** to free up RAM
+
+### Command Not Found (Method 1)
+
+**macOS:**
+```bash
+brew install zstd coreutils jq
+```
+
+**Linux:**
+```bash
+sudo apt install zstd coreutils jq
+```
+
+**Windows:**
+Use WSL (see Installation above)
+
+### reddit_zst_filter_zstd_jq Returns Empty Results
+
+Check that `jq` and `gsplit` are installed:
+```bash
+which jq gsplit
+```
+
+If `gsplit` not found, reinstall `coreutils`:
+```bash
+# macOS
+brew reinstall coreutils
+
+# Linux
+sudo apt install --reinstall coreutils
+```
+
+---
 
 ## Requirements
 
-- Python 3.13
+### Python Dependencies
+- Python 3.10+
 - pandas
 - pyarrow
 - zstandard
 - orjson
 - psutil
 
-See [requirements.txt](requirements.txt) for complete dependencies.
+### For reddit_zst_filter_zstd_jq
+- `zstd` (zstandard command-line tool)
+- `jq` (JSON processor)
+- `gsplit` (part of coreutils)
+
+See `requirements.txt` for full list.
+
+---
+
+## File Structure
+
+```
+.
+├── reddit_filter_utils.py          # Shared utilities
+├── reddit_zst_filter_shell.py      # Method 1 (Shell Pipes)
+├── reddit_zst_filter_python.py     # Method 2 (Python)
+├── config.json                     # Configuration
+├── requirements.txt                # Python dependencies
+└── logs/                           # Processing logs
+```
+
+---
+
+## Data
+
+Reddit dump files can be downloaded from [Academic Torrents](https://academictorrents.com/details/30dee5f0406da7a353aff6a8caa2d54fd01f2ca1)
+
+---
 
 ## Credits
 
-This project is based on code and approaches from:
-- **[Watchful1](https://github.com/Watchful1)** - Original author of [PushshiftDumps](https://github.com/Watchful1/PushshiftDumps/tree/master/scripts) scripts that served as the foundation for this tool
-- **Pushshift Team** - For collecting, archiving, and making available the comprehensive Reddit dataset
+This project is based on:
+- **[Watchful1](https://github.com/Watchful1)** — author of [PushshiftDumps](https://github.com/Watchful1/PushshiftDumps/tree/master/scripts)
+- **Pushshift Team** — for archiving and providing access to Reddit dataset
 
-### Updated Version
-This enhanced and adapted version was prepared as part of the **Computational Social Science (CSS) course, 2025, NaUKMA**.
-
-## Acknowledgments
-
-Special thanks to:
-- [Watchful1](https://github.com/Watchful1) for creating the original filtering and processing logic
-- The Pushshift project for their invaluable work in archiving and providing access to Reddit data
-- All contributors to the open-source tools and libraries that make this project possible
+Updated and restructured version prepared as part of **Computational Social Science (CSS) course, 2025, NaUKMA**
