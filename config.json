@@ -12,7 +12,8 @@
     "log_format": "%(asctime)s - %(levelname)s: %(message)s"
   },
   "processing": {
-    "progress_log_interval": 5000000
+    "progress_log_interval": 5000000,
+    "batch_size": 100000
   },
   "file_filtering": {
     "default_file_filter": "^RC_|^RS_",
@@ -43,5 +44,39 @@
     "field": "subreddit",
     "value": "ukraine",
     "regex": false
+  },
+  "field_presets": {
+    "submissions": [
+      "id",
+      "subreddit",
+      "author",
+      "created_utc",
+      "title",
+      "selftext",
+      "url",
+      "domain",
+      "score",
+      "upvote_ratio",
+      "num_comments",
+      "link_flair_text",
+      "is_self",
+      "over_18",
+      "removed_by_category",
+      "permalink"
+    ],
+    "comments": [
+      "id",
+      "link_id",
+      "parent_id",
+      "subreddit",
+      "author",
+      "author_flair_text",
+      "created_utc",
+      "body",
+      "score",
+      "controversiality",
+      "is_submitter",
+      "edited"
+    ]
   }
 }

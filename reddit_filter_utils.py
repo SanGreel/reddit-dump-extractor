@@ -102,6 +102,41 @@ class FileReader:
                 for line in lines[:-1]:
                     yield line
                 buffer = lines[-1]
+            if buffer:
+                # last line of a file that doesn't end with a newline
+                yield buffer
+            reader.close()
+
+    def iter_blocks(self, file_path: str):
+        """
+        Yield (block, compressed_pos, compressed_size).
+
+        `block` is raw bytes made of complete lines, each ending with b"\n".
+        Works on bytes end to end: no utf-8 decode/encode, so a multi-byte
+        character split between two reads is not a problem (b"\n" never
+        occurs inside a utf-8 sequence). compressed_pos is how far into the
+        .zst file we are, for progress/ETA.
+        """
+        chunk_size = self.config.get('file_reading', 'chunk_size_bytes')
+        compressed_size = os.path.getsize(file_path)
+        with open(file_path, 'rb') as file_handle:
+            reader = zstandard.ZstdDecompressor(
+                max_window_size=self.config.get('file_reading', 'zst_max_window_size_bytes')
+            ).stream_reader(file_handle)
+            remainder = b''
+            while True:
+                chunk = reader.read(chunk_size)
+                if not chunk:
+                    break
+                data = remainder + chunk
+                last_nl = data.rfind(b'\n')
+                if last_nl == -1:
+                    remainder = data
+                    continue
+                remainder = data[last_nl + 1:]
+                yield data[:last_nl + 1], file_handle.tell(), compressed_size
+            if remainder:
+                yield remainder + b'\n', compressed_size, compressed_size
             reader.close()
 
 
@@ -145,6 +180,68 @@ def build_jq_filter(field: str, values: Union[Set[str], List[re.Pattern]], regex
         else:
             values_str = ', '.join(fr'\"{v}\"' for v in values)
             return f'select(.{field} | IN({values_str}))'
+
+
+# Values that are safe for the byte-level prefilter: plain ASCII names
+# (subreddits, usernames, ids). They never need JSON escaping, and
+# re.IGNORECASE on bytes folds ASCII case exactly like str.lower() does.
+_SAFE_VALUE_RE = re.compile(r'^[A-Za-z0-9_\-]+$')
+
+
+def build_prefilter(field: str, values, regex: bool, log: logging.Logger):
+    """
+    Build a bytes regex that finds candidate lines before JSON parsing.
+
+    It matches  "<field>" : "<one of values>"  anywhere in the raw line.
+    It is a superset check: every line the exact filter would accept
+    contains this text, so results are identical; lines it lets through
+    by accident (e.g. the value inside crosspost_parent_list) are still
+    rejected by the exact check on the parsed object.
+
+    Returns None (= check every line, original behaviour) when the filter
+    can't be expressed safely: regex mode, or non-ASCII / unusual values.
+    """
+    if regex:
+        log.info("Prefilter disabled: regex mode")
+        return None
+    if not _SAFE_VALUE_RE.match(field) or not all(_SAFE_VALUE_RE.match(v) for v in values):
+        log.info("Prefilter disabled: field/values are not plain ASCII names")
+        return None
+    alternation = b'|'.join(re.escape(v.encode()) for v in sorted(values))
+    pattern = b'"' + re.escape(field.encode()) + rb'"\s*:\s*"(?:' + alternation + b')"'
+    log.info(f"Prefilter enabled on raw bytes: {pattern.decode()} (case-insensitive)")
+    return re.compile(pattern, re.IGNORECASE)
+
+
+def iter_candidate_lines(block: bytes, prefilter):
+    """Yield each line of `block` that contains a prefilter match (once per line)."""
+    pos = 0
+    search = prefilter.search
+    while True:
+        m = search(block, pos)
+        if m is None:
+            return
+        start = block.rfind(b'\n', 0, m.start()) + 1
+        end = block.find(b'\n', m.end())
+        yield block[start:end]
+        pos = end + 1  # skip the rest of this line
+
+
+def resolve_fields(fields_arg: Optional[str], config: 'Config') -> Optional[List[str]]:
+    """--fields: comma-separated list, or the name of a preset from config.json."""
+    if not fields_arg:
+        return None
+    presets = config._config.get('field_presets', {})
+    if fields_arg in presets:
+        return list(presets[fields_arg])
+    return [f.strip() for f in fields_arg.split(',') if f.strip()]
+
+
+def format_eta(seconds: float) -> str:
+    seconds = int(max(seconds, 0))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}"
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -198,6 +295,37 @@ def parse_arguments() -> argparse.Namespace:
         type=int,
         help="Lines per chunk for shell method (default: 1000000)",
         default=1000000
+    )
+
+    parser.add_argument(
+        "--fields",
+        help="Keep only these fields: comma-separated list or a preset name from "
+             "config.json field_presets (e.g. submissions, comments). "
+             "With --format csv the output is written in batches, so RAM stays flat.",
+        default=None
+    )
+
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        help="Matched records per write when --fields is set (default: from config.json)",
+        default=None
+    )
+
+    parser.add_argument(
+        "--workers",
+        type=int,
+        help="Process this many .zst files in parallel (one process per file; default: 1). "
+             "RAM grows with the number of workers, so combine with --fields on big files.",
+        default=1
+    )
+
+    parser.add_argument(
+        "--no_prefilter",
+        help="Parse JSON of every line (original behaviour; slower). "
+             "Use to compare results or to count malformed lines in the whole file.",
+        action='store_true',
+        default=False
     )
 
     parser.add_argument("--config", help="Path to config file (default: config.json)", default="config.json")

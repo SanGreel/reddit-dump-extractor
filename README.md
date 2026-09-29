@@ -11,7 +11,14 @@ This repository provides **two separate methods** for processing large volumes o
 | Method               | File                             | Technology | RAM | Best For |
 |----------------------|----------------------------------|-----------|-----|----------|
 | **zstd_jq**          | `reddit_zst_filter_zstd_jq.py`   | Shell Pipes | Very Low (2-4GB) | Huge files, limited RAM |
-| **zstandard_python** | `reddit_zst_filter_zstandard.py` | Python | High (8GB+) | Speed, error tracking |
+| **zstandard_python** | `reddit_zst_filter_zstandard.py` | Python | High (8GB+); low with `--fields` | Speed, error tracking |
+
+> **Note.** The byte-level prefilter and streaming output (`--fields`), described in
+> [Faster filtering and flat memory](#faster-filtering-and-flat-memory), are implemented
+> in `reddit_zst_filter_zstandard.py` only; `reddit_zst_filter_zstd_jq.py` is unchanged.
+> With `--fields`, the Python method writes matches in batches instead of keeping them
+> in memory (under 1 GB per run on full monthly comment dumps in our runs), so it also
+> covers the limited-RAM case. The shell method is still available if you prefer `jq`.
 
 ---
 
@@ -156,6 +163,69 @@ python reddit_zst_filter_zstandard.py <input_folder> [options]
 | `--regex` | Enable regex patterns | `false` |
 | `--file_filter` | Regex for filenames | `^RC_\|^RS_` |
 | `--config` | Path to config.json | `config.json` |
+| `--fields` | Keep only these fields: comma list or preset from `config.json` (`submissions`, `comments`). With CSV, output is written in batches | all fields |
+| `--batch_size` | Records per write when `--fields` is set | `100000` |
+| `--no_prefilter` | Parse JSON of every line (original behaviour) | `false` |
+| `--workers` | Process this many `.zst` files in parallel, one process per file | `1` |
+
+### Faster filtering and flat memory
+
+**Byte-level prefilter (on by default for exact matching).** Before parsing JSON,
+each raw block is searched with one compiled regex for
+`"<field>" : "<value1|value2|...>"` (case-insensitive). Only matching lines are
+parsed; the exact check on the parsed object is unchanged, so the matched
+records are identical. Lines that match only by accident (e.g. the value inside
+`crosspost_parent_list`) are still rejected by the exact check.
+The prefilter is switched off automatically in `--regex` mode and for values
+that are not plain ASCII names. Note: malformed lines are then counted only
+among candidates; use `--no_prefilter` to count them in the whole file.
+
+**Streaming output.** `--fields` keeps only the listed columns and appends to
+the output every `--batch_size` records instead of holding all matches in
+memory. Useful for comment dumps from large subreddits. Works for CSV and
+Parquet; in streaming Parquet every column is stored as a string (missing
+values as nulls), because pandas infers types per batch and Parquet needs one
+schema per file. The values are the same text as in the CSV output; cast types
+after loading if needed.
+
+**Parallel files.** `--workers N` processes N `.zst` files at once (e.g. several
+months), one process per file, logs from all workers go to the same console and
+log file. Each worker holds its own buffers, so use `--fields` when running
+several workers on comment dumps.
+
+```bash
+python reddit_zst_filter_zstandard.py /path/to/dumps \
+  --file_filter "^RC_" --value "ukraine,europe" --fields comments
+```
+
+Progress is logged with percent of the compressed file and ETA.
+
+**Benchmark** (`benchmarks/compare_with_baseline.py`, first 5,000,000 lines of
+`RC_2026-07`, 8 subreddits, 9,154 matches; MacBook, Apple M3, 8 CPUs, Python 3.14):
+
+| | wall time | lines/s | peak RSS | output |
+|---|---|---|---|---|
+| original (`main`) | 44.8 s | 112k | 2.15 GB | reference |
+| prefilter, all fields | 20.4 s | 245k | 0.82 GB | byte-identical |
+| prefilter + `--fields comments` | 19.8 s | 252k | 0.74 GB | same records |
+
+`--workers 4` on 4 such files: 79.3 s → 28.0 s (2.8×).
+
+On a full month (MacBook, `RS_2026-07`, 45.7M lines): original 18.7 min,
+new version 7.2 min, peak RSS 1.14 GB; output byte-identical to the original.
+Comments `RC_2026-07` + `RC_2026-08` (739M lines, two runs in parallel,
+`--fields`, 82 columns): 28 min, 220–238k lines/s each, RAM under 1 GB per run.
+
+Outputs of the original and the prefiltered run are cell-by-cell identical.
+Equivalence on edge cases: `python tests/test_equivalence.py`.
+
+Reproduce the comparison on your own dump (baseline = `main`, output checked
+byte-for-byte, peak memory measured per run):
+
+```bash
+python benchmarks/compare_with_baseline.py /path/to/RC_2023-01.zst \
+  --value "ukraine,europe" --lines 5000000 --workers 4
+```
 
 ### Examples
 
@@ -236,7 +306,7 @@ Both methods log:
 - Records matched per file
 - Final statistics (total lines, matches, errors, processing rate)
 
-Logs are saved to `logs/reddit_filter.log` with file rotation.
+Logs are saved to `logs/bot.log` (see `logging.log_file_name` in `config.json`) with file rotation.
 
 ---
 
@@ -335,10 +405,12 @@ See `requirements.txt` for full list.
 ```
 .
 ├── reddit_filter_utils.py          # Shared utilities
-├── reddit_zst_filter_shell.py      # Method 1 (Shell Pipes)
-├── reddit_zst_filter_python.py     # Method 2 (Python)
+├── reddit_zst_filter_zstd_jq.py    # Method 1 (Shell Pipes)
+├── reddit_zst_filter_zstandard.py  # Method 2 (Python)
 ├── config.json                     # Configuration
 ├── requirements.txt                # Python dependencies
+├── tests/test_equivalence.py       # Prefilter / streaming / workers equivalence tests
+├── benchmarks/compare_with_baseline.py  # Speed & memory vs. a baseline git ref
 └── logs/                           # Processing logs
 ```
 
