@@ -11,7 +11,14 @@ This repository provides **two separate methods** for processing large volumes o
 | Method               | File                             | Technology | RAM | Best For |
 |----------------------|----------------------------------|-----------|-----|----------|
 | **zstd_jq**          | `reddit_zst_filter_zstd_jq.py`   | Shell Pipes | Very Low (2-4GB) | Huge files, limited RAM |
-| **zstandard_python** | `reddit_zst_filter_zstandard.py` | Python | High (8GB+) | Speed, error tracking |
+| **zstandard_python** | `reddit_zst_filter_zstandard.py` | Python | High (8GB+); low with `--fields` | Speed, error tracking |
+
+> **Note.** The byte-level prefilter and streaming output (`--fields`), described in
+> [Faster filtering and flat memory](#faster-filtering-and-flat-memory), are implemented
+> in `reddit_zst_filter_zstandard.py` only; `reddit_zst_filter_zstd_jq.py` is unchanged.
+> With `--fields`, the Python method writes matches in batches instead of keeping them
+> in memory (under 1 GB per run on full monthly comment dumps in our runs), so it also
+> covers the limited-RAM case. The shell method is still available if you prefer `jq`.
 
 ---
 
